@@ -103,44 +103,61 @@ class DeribitApp:
             data = json.loads(message)
             if 'params' in data and 'data' in data['params']:
                 ticker_data = data['params']['data']
-                price = ticker_data.get('last_price')
-                bid = ticker_data.get('best_bid_price')
-                ask = ticker_data.get('best_ask_price')
                 
-                if price and price > 0:
-                    with self.lock:
-                        self.last_price = price
-                        self.bid_price = bid or price
-                        self.ask_price = ask or price
-                        self.price_history.append((datetime.now(), price))
-                        
-                        # Update OHLC bar
-                        if self.current_bar is None:
+                # Validate required fields
+                if 'last_price' not in ticker_data:
+                    return
+                
+                price = ticker_data.get('last_price')
+                bid = ticker_data.get('best_bid_price', price)
+                ask = ticker_data.get('best_ask_price', price)
+                
+                # Validate price values
+                if not isinstance(price, (int, float)) or price <= 0:
+                    print(f"⚠ Invalid price value: {price}")
+                    return
+                
+                if not isinstance(bid, (int, float)) or bid <= 0:
+                    bid = price
+                if not isinstance(ask, (int, float)) or ask <= 0:
+                    ask = price
+                
+                with self.lock:
+                    self.last_price = price
+                    self.bid_price = bid
+                    self.ask_price = ask
+                    self.price_history.append((datetime.now(), price))
+                    
+                    # Update OHLC bar
+                    if self.current_bar is None:
+                        self.current_bar = OHLCBar(datetime.now(), price)
+                        self.bar_start_time = datetime.now()
+                    else:
+                        elapsed = (datetime.now() - self.bar_start_time).total_seconds()
+                        if elapsed >= self.bar_duration:
+                            # New bar
+                            self.ohlc_bars.append(self.current_bar)
+                            if len(self.ohlc_bars) >= 3:
+                                regime = self.regime_model.get_regime(list(self.ohlc_bars))
+                                self.current_bar.regime = regime
+                            
                             self.current_bar = OHLCBar(datetime.now(), price)
                             self.bar_start_time = datetime.now()
                         else:
-                            elapsed = (datetime.now() - self.bar_start_time).total_seconds()
-                            if elapsed >= self.bar_duration:
-                                # New bar
-                                self.ohlc_bars.append(self.current_bar)
-                                if len(self.ohlc_bars) >= 3:
-                                    regime = self.regime_model.get_regime(list(self.ohlc_bars))
-                                    self.current_bar.regime = regime
-                                
-                                self.current_bar = OHLCBar(datetime.now(), price)
-                                self.bar_start_time = datetime.now()
-                            else:
-                                self.current_bar.update(price)
-                        
-                        # Emit price update
-                        emit_event('price_update', {
-                            'price': price,
-                            'bid': self.bid_price,
-                            'ask': self.ask_price,
-                            'timestamp': datetime.now().isoformat()
-                        })
+                            self.current_bar.update(price)
+                    
+                    # Emit price update
+                    emit_event('price_update', {
+                        'price': price,
+                        'bid': bid,
+                        'ask': ask,
+                        'timestamp': datetime.now().isoformat(),
+                        'spread': ask - bid
+                    })
+        except json.JSONDecodeError as e:
+            print(f"⚠ Invalid JSON message: {e}")
         except Exception as e:
-            print(f"Message processing error: {e}")
+            print(f"⚠ Message processing error: {e}")
 
     def _on_ws_error(self, ws, error):
         print(f"WebSocket error: {error}")
@@ -202,6 +219,7 @@ class DeribitApp:
             print(f"Unsubscribe error: {e}")
 
     def get_instruments(self, currency, kind):
+        """Get available instruments from Deribit API"""
         try:
             params = {"currency": currency, "kind": kind, "expired": False}
             response = requests.get(
@@ -209,35 +227,109 @@ class DeribitApp:
                 params=params,
                 timeout=10
             )
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data:
-                    return [inst['instrument_name'] for inst in data['result']]
+            
+            if response.status_code != 200:
+                print(f"✗ API Error {response.status_code}: {response.text[:200]}")
+                return []
+            
+            data = response.json()
+            if 'result' not in data:
+                print(f"✗ Invalid response format: missing 'result' key")
+                return []
+            
+            result = data['result']
+            if not isinstance(result, list):
+                print(f"✗ Invalid result format: expected list, got {type(result)}")
+                return []
+            
+            instruments = [inst.get('instrument_name') for inst in result if 'instrument_name' in inst]
+            print(f"✓ Retrieved {len(instruments)} instruments for {currency}/{kind}")
+            return instruments
+            
+        except requests.Timeout:
+            print(f"✗ Request timeout while fetching instruments")
+            return []
+        except requests.RequestException as e:
+            print(f"✗ Network error: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"✗ Invalid JSON response: {e}")
             return []
         except Exception as e:
-            print(f"Get instruments error: {e}")
+            print(f"✗ Unexpected error getting instruments: {e}")
             return []
 
     def get_historical_data(self, symbol):
+        """Get historical OHLC data from Deribit"""
         try:
+            # Timestamps in milliseconds (Deribit requirement)
+            now_ms = int(datetime.now().timestamp() * 1000)
+            start_ms = int((datetime.now() - timedelta(seconds=300)).timestamp() * 1000)
+            
             params = {
                 "instrument_name": symbol,
-                "start_timestamp": int((datetime.now() - timedelta(seconds=300)).timestamp() * 1000),
-                "end_timestamp": int(datetime.now().timestamp() * 1000),
-                "resolution": "5"
+                "start_timestamp": start_ms,
+                "end_timestamp": now_ms,
+                "resolution": "5"  # 5-second bars
             }
+            
             response = requests.get(
                 f"{self.base_url}/public/get_tradingview_chart_data",
                 params=params,
                 timeout=10
             )
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data and data['result']:
-                    return data['result']
+            
+            if response.status_code != 200:
+                print(f"✗ API Error {response.status_code}: {response.text[:200]}")
+                return []
+            
+            data = response.json()
+            if 'result' not in data:
+                print(f"✗ Invalid response format: missing 'result' key")
+                return []
+            
+            result = data['result']
+            if not result:
+                print(f"⚠ No historical data available for {symbol}")
+                return []
+            
+            # Validate OHLC structure
+            required_keys = ['o', 'h', 'l', 'c']
+            for key in required_keys:
+                if key not in result:
+                    print(f"✗ Invalid OHLC data: missing '{key}' key")
+                    return []
+            
+            # Build bar objects
+            bars = []
+            for i in range(len(result.get('o', []))):
+                try:
+                    bar = {
+                        'o': result['o'][i],
+                        'h': result['h'][i],
+                        'l': result['l'][i],
+                        'c': result['c'][i],
+                        'v': result.get('v', [0])[i] if 'v' in result else 0,
+                        't': result.get('ticks', [])[i] if 'ticks' in result else None
+                    }
+                    bars.append(bar)
+                except (IndexError, KeyError) as e:
+                    print(f"⚠ Error processing bar {i}: {e}")
+            
+            print(f"✓ Retrieved {len(bars)} historical bars for {symbol}")
+            return bars
+            
+        except requests.Timeout:
+            print(f"✗ Request timeout while fetching historical data")
+            return []
+        except requests.RequestException as e:
+            print(f"✗ Network error: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"✗ Invalid JSON response: {e}")
             return []
         except Exception as e:
-            print(f"Historical data error: {e}")
+            print(f"✗ Unexpected error getting historical data: {e}")
             return []
 
     def disconnect(self):
