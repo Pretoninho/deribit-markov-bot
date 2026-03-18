@@ -3,7 +3,7 @@ Flask backend for Deribit Markov Bot with WebSocket support
 """
 from flask import Flask, render_template, jsonify, request
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit, join_room
+from flask_socketio import SocketIO, emit
 import threading
 import time
 from datetime import datetime, timedelta
@@ -17,9 +17,18 @@ from markov_model import MarkovRegime, OHLCBar
 
 warnings.filterwarnings("ignore")
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Store clients for broadcasting
+connected_clients = set()
+
+def emit_event(event, data):
+    """Emit event to all connected clients"""
+    thr = threading.Thread(target=lambda: socketio.emit(event, data, broadcast=True, namespace='/'))
+    thr.daemon = True
+    thr.start()
 
 class DeribitApp:
     def __init__(self, testnet=True):
@@ -243,10 +252,6 @@ class DeribitApp:
 
 # Global Deribit app instance
 g_deribit = None
-
-def emit_event(event, data):
-    """Emit event to all connected clients"""
-    socketio.emit(event, data, broadcast=True)
 
 # API Routes
 @app.route('/', methods=['GET'])
