@@ -268,13 +268,21 @@ def api_connect():
     data = request.json
     testnet = data.get('testnet', True)
     
-    if g_deribit is None:
+    print(f"Connect request: testnet={testnet}")
+    
+    # Check if we need a new instance
+    if g_deribit is None or g_deribit.testnet != testnet:
+        print("Creating new DeribitApp instance")
+        if g_deribit:
+            g_deribit.disconnect()
         g_deribit = DeribitApp(testnet=testnet)
     
     if g_deribit.connect():
-        return jsonify({'status': 'connected'}), 200
+        print("✓ Connection successful")
+        return jsonify({'status': 'connected', 'env': 'testnet' if testnet else 'mainnet'}), 200
     else:
-        return jsonify({'status': 'failed', 'error': 'Connection failed'}), 400
+        print("✗ Connection failed")
+        return jsonify({'status': 'failed', 'error': 'Connection timeout or failed'}), 400
 
 @app.route('/api/disconnect', methods=['POST'])
 def api_disconnect():
@@ -307,10 +315,21 @@ def api_status():
 def api_instruments(currency, kind):
     global g_deribit
     if g_deribit is None:
-        return jsonify([]), 200
+        print(f"ERROR: g_deribit is None when requesting {currency}/{kind}")
+        return jsonify({'error': 'Not connected', 'instruments': []}), 200
     
-    instruments = g_deribit.get_instruments(currency, kind)
-    return jsonify(instruments), 200
+    if not g_deribit.connected:
+        print(f"ERROR: g_deribit not connected when requesting {currency}/{kind}")
+        return jsonify({'error': 'Connection lost', 'instruments': []}), 200
+    
+    print(f"Getting instruments: {currency}/{kind}")
+    try:
+        instruments = g_deribit.get_instruments(currency, kind)
+        print(f"Returned {len(instruments)} instruments")
+        return jsonify(instruments), 200
+    except Exception as e:
+        print(f"ERROR getting instruments: {e}")
+        return jsonify({'error': str(e), 'instruments': []}), 500
 
 @app.route('/api/subscribe', methods=['POST'])
 def api_subscribe():

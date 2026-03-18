@@ -503,6 +503,8 @@
         async function connectDeribit() {
             const env = document.getElementById('env-select').value;
             const testnet = env === 'testnet';
+            
+            console.log(`Connecting to Deribit ${env}...`);
 
             try {
                 const response = await fetch('/api/connect', {
@@ -512,13 +514,18 @@
                 });
 
                 if (response.ok) {
+                    const data = await response.json();
+                    console.log('Connection response:', data);
                     isConnected = true;
                     updateStatus();
+                    showMessage('✓ Connected to Deribit', 'success');
                 } else {
-                    showMessage('Connection failed', 'error');
+                    console.error('Connection failed:', response.status);
+                    showMessage('❌ Connection failed', 'error');
                 }
             } catch (error) {
-                showMessage(`Error: ${error.message}`, 'error');
+                console.error('Connect error:', error);
+                showMessage(`❌ Error: ${error.message}`, 'error');
             }
         }
 
@@ -532,29 +539,55 @@
         }
 
         async function loadInstruments() {
-            if (!isConnected) return;
+            if (!isConnected) {
+                console.log('Not connected, skipping instrument load');
+                return;
+            }
 
             const asset = document.getElementById('asset-select').value;
             const kind = document.getElementById('type-select').value;
+            
+            console.log(`Loading instruments: ${asset}/${kind}`);
 
             try {
-                const response = await fetch(`/api/instruments/${asset}/${kind}`);
-                const instruments = await response.json();
+                const url = `/api/instruments/${asset}/${kind}`;
+                console.log(`Fetching: ${url}`);
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                let data = await response.json();
+                let instruments = Array.isArray(data) ? data : data.instruments || [];
+                
+                console.log(`Received ${instruments.length} instruments:`, instruments);
 
                 const select = document.getElementById('instrument-select');
                 select.innerHTML = '';
-                instruments.forEach(inst => {
-                    const option = document.createElement('option');
-                    option.value = inst;
-                    option.textContent = inst;
-                    select.appendChild(option);
-                });
-
-                if (instruments.length > 0) {
+                
+                if (instruments && instruments.length > 0) {
+                    instruments.forEach(inst => {
+                        const option = document.createElement('option');
+                        option.value = inst;
+                        option.textContent = inst;
+                        select.appendChild(option);
+                    });
                     document.getElementById('stream-btn').disabled = false;
+                    showMessage(`✓ Loaded ${instruments.length} instruments`, 'success');
+                } else {
+                    const option = document.createElement('option');
+                    option.textContent = 'No instruments found';
+                    select.appendChild(option);
+                    document.getElementById('stream-btn').disabled = true;
+                    showMessage('⚠ No instruments for this pair', 'error');
                 }
             } catch (error) {
-                showMessage(`Load failed: ${error.message}`, 'error');
+                console.error('Load instruments error:', error);
+                const select = document.getElementById('instrument-select');
+                select.innerHTML = '<option>Error loading</option>';
+                document.getElementById('stream-btn').disabled = true;
+                showMessage(`❌ Load failed: ${error.message}`, 'error');
             }
         }
 
