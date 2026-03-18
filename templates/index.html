@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deribit Regime Switching Bot</title>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4/dist/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            border-radius: 8px;
+            border: 1px solid #30363d;
+        }
+
+        h1 {
+            color: #58a6ff;
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #8b949e;
+            font-size: 14px;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .sidebar {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+            height: fit-content;
+        }
+
+        .sidebar h3 {
+            color: #58a6ff;
+            margin-bottom: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: #8b949e;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 8px 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        select:hover, input:hover {
+            border-color: #58a6ff;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px 16px;
+            margin-bottom: 10px;
+            background: #238636;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2ea043;
+        }
+
+        button.danger {
+            background: #da3633;
+        }
+
+        button.danger:hover {
+            background: #f85149;
+        }
+
+        button:disabled {
+            background: #21262d;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            background: #f85149;
+            color: white;
+            border-radius: 24px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .status-badge.connected {
+            background: #3fb950;
+        }
+
+        .main-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .metric {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .metric-label {
+            color: #8b949e;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .metric-value {
+            color: #58a6ff;
+            font-size: 24px;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+        }
+
+        .regime-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        .regime-low {
+            background: #3fb950;
+            color: white;
+        }
+
+        .regime-medium {
+            background: #d29922;
+            color: white;
+        }
+
+        .regime-high {
+            background: #f85149;
+            color: white;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 20px;
+            background: #0d1117;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .chart-container canvas {
+            height: 100% !important;
+        }
+
+        .info-box {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-left: 3px solid #58a6ff;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #8b949e;
+        }
+
+        .error-box {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid #f85149;
+            border-left: 3px solid #f85149;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #f85149;
+        }
+
+        .success-box {
+            background: rgba(63, 185, 80, 0.1);
+            border: 1px solid #3fb950;
+            border-left: 3px solid #3fb950;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #3fb950;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+            color: #8b949e;
+        }
+
+        .spinner {
+            border: 3px solid #30363d;
+            border-top: 3px solid #58a6ff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Deribit Regime Switching Bot</h1>
+            <p class="subtitle">Real-time Live Market Data with Markov Regime Detection</p>
+        </header>
+
+        <div class="main-grid">
+            <!-- Sidebar -->
+            <div class="sidebar">
+                <h3>⚙️ Control Panel</h3>
+
+                <div id="connection-status" class="status-badge">DISCONNECTED</div>
+
+                <h3 style="margin-top: 20px;">Connection</h3>
+                <div class="form-group">
+                    <label>Environment</label>
+                    <select id="env-select">
+                        <option value="testnet">Testnet</option>
+                        <option value="mainnet">Mainnet</option>
+                    </select>
+                </div>
+                <button id="connect-btn" onclick="connectDeribit()">🔗 Connect</button>
+                <button id="disconnect-btn" class="danger" onclick="disconnectDeribit()" disabled>🔌 Disconnect</button>
+
+                <div id="instruments-section" class="hidden">
+                    <h3 style="margin-top: 20px;">Select Instrument</h3>
+                    <div class="form-group">
+                        <label>Asset</label>
+                        <select id="asset-select" onchange="loadInstruments()">
+                            <option value="BTC">BTC</option>
+                            <option value="ETH">ETH</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Type</label>
+                        <select id="type-select" onchange="loadInstruments()">
+                            <option value="future">Future</option>
+                            <option value="option">Option</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Instrument</label>
+                        <select id="instrument-select">
+                            <option>-- Loading --</option>
+                        </select>
+                    </div>
+                    <button id="stream-btn" onclick="toggleStream()" disabled>▶ Start Stream</button>
+                </div>
+
+                <div id="messages"></div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="main-content">
+                <div id="metrics" class="metrics-grid"></div>
+                <div id="chart-container" class="chart-container hidden">
+                    <canvas id="priceChart"></canvas>
+                </div>
+                <div id="content-loading" class="loading">
+                    <div class="spinner"></div>
+                    <p>Waiting for connection...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let socket;
+        let priceChart;
+        let priceData = [];
+        let isConnected = false;
+        let isStreaming = false;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initSocket();
+            initChart();
+        });
+
+        function initSocket() {
+            socket = io();
+
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+
+            socket.on('connection_status', (data) => {
+                if (data.status === 'connected') {
+                    isConnected = true;
+                    updateStatus();
+                    showMessage(data.message, 'success');
+                } else if (data.status === 'error') {
+                    isConnected = false;
+                    updateStatus();
+                    showMessage(data.message, 'error');
+                }
+            });
+
+            socket.on('subscription_status', (data) => {
+                if (data.status === 'subscribed') {
+                    isStreaming = true;
+                    showMessage(data.message, 'success');
+                    document.getElementById('stream-btn').textContent = '⏹ Stop Stream';
+                } else {
+                    isStreaming = false;
+                    showMessage(data.message, 'error');
+                    document.getElementById('stream-btn').textContent = '▶ Start Stream';
+                }
+            });
+
+            socket.on('price_update', (data) => {
+                updateMetrics(data);
+            });
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('priceChart');
+            priceChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Price',
+                        data: [],
+                        borderColor: '#58a6ff',
+                        backgroundColor: 'rgba(88, 166, 255, 0.1)',
+                        tension: 0.1,
+                        fill: true,
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHoverRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: { color: '#8b949e' }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            ticks: { color: '#8b949e' },
+                            grid: { color: '#30363d', drawBorder: false },
+                            border: { display: false }
+                        },
+                        x: {
+                            ticks: { color: '#8b949e' },
+                            grid: { color: '#30363d', drawBorder: false },
+                            border: { display: false }
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateStatus() {
+            const statusEl = document.getElementById('connection-status');
+            const connectBtn = document.getElementById('connect-btn');
+            const disconnectBtn = document.getElementById('disconnect-btn');
+            const instrumentsSection = document.getElementById('instruments-section');
+
+            if (isConnected) {
+                statusEl.textContent = '🟢 CONNECTED';
+                statusEl.className = 'status-badge connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                instrumentsSection.classList.remove('hidden');
+                loadInstruments();
+            } else {
+                statusEl.textContent = '🔴 DISCONNECTED';
+                statusEl.className = 'status-badge';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                instrumentsSection.classList.add('hidden');
+                document.getElementById('stream-btn').disabled = true;
+            }
+        }
+
+        function updateMetrics(data) {
+            const metricsEl = document.getElementById('metrics');
+            const contentLoading = document.getElementById('content-loading');
+            const chartContainer = document.getElementById('chart-container');
+
+            metricsEl.innerHTML = `
+                <div class="metric">
+                    <div class="metric-label">Status</div>
+                    <div class="metric-value">🟢</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Last Price</div>
+                    <div class="metric-value">$${data.price.toFixed(2)}</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Bid</div>
+                    <div class="metric-value">$${data.bid.toFixed(2)}</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Ask</div>
+                    <div class="metric-value">$${data.ask.toFixed(2)}</div>
+                </div>
+            `;
+
+            contentLoading.classList.add('hidden');
+            chartContainer.classList.remove('hidden');
+
+            // Update chart
+            const time = new Date(data.timestamp).toLocaleTimeString();
+            priceChart.data.labels.push(time);
+            priceChart.data.datasets[0].data.push(data.price);
+
+            if (priceChart.data.labels.length > 50) {
+                priceChart.data.labels.shift();
+                priceChart.data.datasets[0].data.shift();
+            }
+
+            priceChart.update('none');
+        }
+
+        async function connectDeribit() {
+            const env = document.getElementById('env-select').value;
+            const testnet = env === 'testnet';
+
+            try {
+                const response = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ testnet })
+                });
+
+                if (response.ok) {
+                    isConnected = true;
+                    updateStatus();
+                } else {
+                    showMessage('Connection failed', 'error');
+                }
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function disconnectDeribit() {
+            fetch('/api/disconnect', { method: 'POST' }).then(() => {
+                isConnected = false;
+                isStreaming = false;
+                updateStatus();
+                showMessage('Disconnected', 'info');
+            });
+        }
+
+        async function loadInstruments() {
+            if (!isConnected) return;
+
+            const asset = document.getElementById('asset-select').value;
+            const kind = document.getElementById('type-select').value;
+
+            try {
+                const response = await fetch(`/api/instruments/${asset}/${kind}`);
+                const instruments = await response.json();
+
+                const select = document.getElementById('instrument-select');
+                select.innerHTML = '';
+                instruments.forEach(inst => {
+                    const option = document.createElement('option');
+                    option.value = inst;
+                    option.textContent = inst;
+                    select.appendChild(option);
+                });
+
+                if (instruments.length > 0) {
+                    document.getElementById('stream-btn').disabled = false;
+                }
+            } catch (error) {
+                showMessage(`Load failed: ${error.message}`, 'error');
+            }
+        }
+
+        async function toggleStream() {
+            const symbol = document.getElementById('instrument-select').value;
+
+            if (!isStreaming) {
+                const response = await fetch('/api/subscribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol })
+                });
+
+                if (response.ok) {
+                    isStreaming = true;
+                    document.getElementById('stream-btn').textContent = '⏹ Stop Stream';
+                    priceChart.data.labels = [];
+                    priceChart.data.datasets[0].data = [];
+                    priceChart.update();
+                }
+            } else {
+                await fetch('/api/unsubscribe', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol })
+                });
+
+                isStreaming = false;
+                document.getElementById('stream-btn').textContent = '▶ Start Stream';
+            }
+        }
+
+        function showMessage(message, type) {
+            const messagesEl = document.getElementById('messages');
+            const boxClass = type === 'error' ? 'error-box' : type === 'success' ? 'success-box' : 'info-box';
+            const msgEl = document.createElement('div');
+            msgEl.className = boxClass;
+            msgEl.textContent = message;
+            messagesEl.appendChild(msgEl);
+
+            setTimeout(() => msgEl.remove(), 5000);
+        }
+    </script>
+</body>
+</html>

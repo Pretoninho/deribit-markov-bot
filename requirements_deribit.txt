@@ -3,3 +3,10 @@ requests==2.31.0
 matplotlib==3.8.2
 streamlit==1.31.1
 plotly==5.18.0
+flask==3.0.0
+flask-cors==4.0.0
+flask-socketio==5.3.5
+python-socketio==5.9.0
+python-engineio==4.8.0
+scipy==1.11.4
+numpy==1.26.4
