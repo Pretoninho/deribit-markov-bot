@@ -121,7 +121,29 @@ class DeribitApp:
     def _on_ws_close(self, ws, close_status_code, close_msg):
         self.connected = False
 
-    def subscribe_ticker(self, symbol):
+    def get_ticker(self, symbol):
+        """Get current ticker data via REST API"""
+        try:
+            params = {"instrument_name": symbol}
+            response = requests.get(
+                f"{self.base_url}/public/ticker",
+                params=params,
+                timeout=5
+            )
+            response.raise_for_status()
+            data = response.json()
+            if 'result' in data:
+                ticker = data['result']
+                return {
+                    'last_price': ticker.get('last_price'),
+                    'best_bid_price': ticker.get('best_bid_price'),
+                    'best_ask_price': ticker.get('best_ask_price'),
+                    'mark_price': ticker.get('mark_price'),
+                    'index_price': ticker.get('index_price')
+                }
+            return None
+        except Exception as e:
+            return None
         if not self.connected or not self.ws:
             return False
         try:
@@ -186,18 +208,22 @@ class DeribitApp:
     def get_instruments(self, currency, kind):
         try:
             params = {"currency": currency, "kind": kind, "expired": False}
-            response = requests.get(
-                f"{self.base_url}/public/get_instruments",
-                params=params,
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data:
-                    return [inst['instrument_name'] for inst in data['result']]
+            url = f"{self.base_url}/public/get_instruments"
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if 'result' in data and data['result']:
+                instruments = [inst['instrument_name'] for inst in data['result']]
+                return instruments
+            return []
+        except requests.exceptions.Timeout:
+            st.error("⏱️ Timeout: Deribit API not responding")
+            return []
+        except requests.exceptions.ConnectionError:
+            st.error("📡 Connection error: Check your internet connection")
             return []
         except Exception as e:
-            st.error(f"Instruments error: {e}")
+            st.error(f"❌ API error: {str(e)[:100]}")
             return []
 
     def disconnect(self):
@@ -242,12 +268,14 @@ with st.sidebar:
     
     if connect_btn:
         with st.spinner("Connecting to Deribit..."):
-            if st.session_state.deribit is None:
+            # Always create a new instance with correct environment
+            if st.session_state.deribit is None or st.session_state.deribit.testnet != testnet:
                 st.session_state.deribit = DeribitApp(testnet=testnet)
             if st.session_state.deribit.connect():
                 st.success(f"✓ Connected to Deribit {env}")
+                st.balloons()
             else:
-                st.error("✗ Connection failed")
+                st.error("✗ Connection failed - Check Deribit API status")
     
     if disconnect_btn:
         if st.session_state.deribit:
@@ -263,63 +291,79 @@ with st.sidebar:
         
         col1, col2 = st.columns(2)
         with col1:
-            asset = st.selectbox("Asset", ["BTC", "ETH"])
+            asset = st.selectbox("Asset", ["BTC", "ETH"], index=0, key="asset_select")
         with col2:
-            kind = st.selectbox("Type", ["future", "option"])
+            kind = st.selectbox("Type", ["future", "option"], index=0, key="type_select")
         
-        with st.spinner("Loading instruments..."):
-            instruments = st.session_state.deribit.get_instruments(asset, kind)
+        # Load instruments with caching
+        instruments = []
+        if asset and kind:
+            try:
+                instruments = st.session_state.deribit.get_instruments(asset, kind)
+                if instruments:
+                    st.success(f"✓ Loaded {len(instruments)} instruments")
+                else:
+                    st.warning(f"⚠️ No {kind}s found for {asset}")
+            except Exception as e:
+                st.error(f"Error loading instruments: {e}")
         
         if instruments:
-            symbol = st.selectbox("Instrument", instruments, index=0)
+            symbol = st.selectbox("Instrument", instruments, index=0, key="instrument_select")
             
             col1, col2 = st.columns(2)
             with col1:
-                start_btn = st.button("▶ Start Stream", use_container_width=True)
+                start_btn = st.button("▶ Start Stream", use_container_width=True, key="start_btn")
             with col2:
-                stop_btn = st.button("⏹ Stop Stream", use_container_width=True)
+                stop_btn = st.button("⏹ Stop Stream", use_container_width=True, key="stop_btn")
             
             if start_btn:
                 if st.session_state.deribit.subscribe_ticker(symbol):
                     st.session_state.streaming = True
                     st.success(f"✓ Streaming {symbol}")
+                    st.rerun()
             
             if stop_btn:
                 if st.session_state.deribit.current_symbol:
                     st.session_state.deribit.unsubscribe_ticker(st.session_state.deribit.current_symbol)
                 st.session_state.streaming = False
                 st.info("⏹ Stream stopped")
+                st.rerun()
         else:
-            st.warning("No instruments found")
+            st.info("Loading instruments...")
     else:
-        st.info("Connect to Deribit first")
+        st.info("👈 Connect to Deribit first")
 
 # Main content
 if st.session_state.deribit and st.session_state.deribit.connected:
+    # Get current ticker data
+    ticker_data = None
+    if st.session_state.deribit.current_symbol:
+        ticker_data = st.session_state.deribit.get_ticker(st.session_state.deribit.current_symbol)
+    
     # Status and price
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
             "Status",
-            "🟢 CONNECTED" if st.session_state.deribit.connected else "🔴 DISCONNECTED"
+            "🟢 LIVE" if st.session_state.streaming else "🟡 READY"
         )
     
     with col2:
-        if st.session_state.deribit.last_price:
-            st.metric("Last Price", f"${st.session_state.deribit.last_price:.2f}")
+        if ticker_data and ticker_data['last_price']:
+            st.metric("Last Price", f"${ticker_data['last_price']:.2f}")
         else:
             st.metric("Last Price", "---")
     
     with col3:
-        if st.session_state.deribit.bid_price:
-            st.metric("Bid", f"${st.session_state.deribit.bid_price:.2f}")
+        if ticker_data and ticker_data['best_bid_price']:
+            st.metric("Bid", f"${ticker_data['best_bid_price']:.2f}")
         else:
             st.metric("Bid", "---")
     
     with col4:
-        if st.session_state.deribit.ask_price:
-            st.metric("Ask", f"${st.session_state.deribit.ask_price:.2f}")
+        if ticker_data and ticker_data['best_ask_price']:
+            st.metric("Ask", f"${ticker_data['best_ask_price']:.2f}")
         else:
             st.metric("Ask", "---")
     
@@ -333,53 +377,67 @@ if st.session_state.deribit and st.session_state.deribit.connected:
             columns=['Time', 'Price']
         )
         
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=price_df['Time'],
-            y=price_df['Price'],
-            mode='lines+markers',
-            name='Last Price',
-            line=dict(color='#58a6ff', width=2),
-            marker=dict(size=4)
-        ))
-        
-        fig.update_layout(
-            title=f"Live Price Feed - {st.session_state.deribit.current_symbol}",
-            xaxis_title="Time",
-            yaxis_title="Price ($)",
-            hovermode='x unified',
-            template='plotly_dark',
-            height=400,
-            margin=dict(l=50, r=50, t=50, b=50)
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Statistics
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        prices = price_df['Price'].values
-        with col1:
-            st.metric("Current", f"${prices[-1]:.2f}")
-        with col2:
-            st.metric("High", f"${max(prices):.2f}")
-        with col3:
-            st.metric("Low", f"${min(prices):.2f}")
-        with col4:
-            st.metric("Change", f"${prices[-1] - prices[0]:.2f}")
-        with col5:
-            pct_change = ((prices[-1] - prices[0]) / prices[0] * 100) if prices[0] > 0 else 0
-            st.metric("% Change", f"{pct_change:.2f}%")
+        if len(price_df) > 1:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=price_df['Time'],
+                y=price_df['Price'],
+                mode='lines+markers',
+                name='Last Price',
+                line=dict(color='#58a6ff', width=2),
+                marker=dict(size=4)
+            ))
+            
+            fig.update_layout(
+                title=f"📊 Live Price Feed - {st.session_state.deribit.current_symbol}",
+                xaxis_title="Time",
+                yaxis_title="Price ($)",
+                hovermode='x unified',
+                template='plotly_dark',
+                height=400,
+                margin=dict(l=50, r=50, t=50, b=50)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Statistics
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            prices = price_df['Price'].values
+            with col1:
+                st.metric("Current", f"${prices[-1]:.2f}")
+            with col2:
+                st.metric("High", f"${max(prices):.2f}")
+            with col3:
+                st.metric("Low", f"${min(prices):.2f}")
+            with col4:
+                st.metric("Change", f"${prices[-1] - prices[0]:.2f}")
+            with col5:
+                pct_change = ((prices[-1] - prices[0]) / prices[0] * 100) if prices[0] > 0 else 0
+                st.metric("% Change", f"{pct_change:.2f}%")
+        else:
+            st.info("⏳ Collecting price data...")
+    elif st.session_state.streaming:
+        st.info("⏳ Waiting for first price update...")
     else:
-        st.info("🔄 Connect and start streaming to see data")
+        st.info("▶️ Click 'Start Stream' to begin live data")
 else:
     st.warning("🔗 Please connect to Deribit in the sidebar first")
 
-# Auto-refresh
-st.markdown("""
-<script>
-    setTimeout(function() {
-        window.location.reload();
-    }, 2000);
-</script>
-""", unsafe_allow_html=True)
+# Auto-refresh mechanism
+if st.session_state.streaming:
+    st.markdown("""
+    <script>
+        setInterval(function() {
+            window.location.reload();
+        }, 1000);
+    </script>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <script>
+        setInterval(function() {
+            window.location.reload();
+        }, 3000);
+    </script>
+    """, unsafe_allow_html=True)
