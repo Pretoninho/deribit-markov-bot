@@ -221,7 +221,8 @@ class DeribitApp:
     def get_instruments(self, currency, kind):
         """Get available instruments from Deribit API"""
         try:
-            params = {"currency": currency, "kind": kind, "expired": False}
+            # Note: Deribit API expects lowercase boolean strings, not Python booleans
+            params = {"currency": currency, "kind": kind, "expired": "false"}
             response = requests.get(
                 f"{self.base_url}/public/get_instruments",
                 params=params,
